@@ -2,16 +2,20 @@
 
 import sys
 import subprocess
+import pandas as pd
+import numpy as np
+import re
+import tifffile as tf
+import os
+from contextlib import contextmanager
+import tkinter as tk
+import cv2
+from tkinter import filedialog, Listbox
+from PIL import Image, ImageTk
 
 # Run install_dependency.py before importing any modules
 subprocess.run([sys.executable, 'install_dependency.py'])
 
-import subprocess
-import os
-import sys
-from contextlib import contextmanager
-import tkinter as tk
-from tkinter import filedialog, messagebox
 
 os.environ['PATH'] = "/usr/bin:" + os.environ['PATH']
 
@@ -65,134 +69,185 @@ if not is_exiftool_installed():
         print("Skipping exiftool installation.")
         sys.exit(1)
 
-# Create and open the Sum_Script_Prints.txt file for writing
-with open('Sum_Script_Prints.txt', 'w') as print_file:
-
-    @contextmanager
-    def suppress_output():
-        # Redirect stdout and stderr to the Sum_Script_Prints.txt file
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-        sys.stdout = print_file
-        sys.stderr = print_file
-        yield
-        # Restore stdout and stderr
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
-
-    def run_script(script_path, args=None):
-        script_name = os.path.basename(script_path)  # Extract script name from script_path
-        print(f'Running {script_path}')
-        command = ['python3', script_path]
-        if args:
-            command.extend(args)
 
 
-        try:
-            with suppress_output():
-                result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=os.environ, text=True, universal_newlines=True)
-
-            script_output = result.stdout
-            script_error = result.stderr
-
-            # Split the script output by lines and filter/print desired lines
-            lines = script_output.split('\n')
-            for line in lines:
-                if "Running..." in line or line.startswith("step"):
-                    print(f'{script_name}: {line}')  # Include script_name before each line
-
-            # Append script_error to the Sum_Script_Prints.txt file
-            if script_error:
-                print(f'{script_name}: Error: {script_error}')  # Include script_name before error message
-
-            return script_output
-
-        except Exception as e:
-            print(f'Error running {script_path}: {str(e)}\n')
-
-def select_directory(entry, is_file=False):
-    if is_file:
-        file_path = filedialog.askopenfilename(filetypes=[("TIFF Files", "*.TIF"), ("All Files", "*.*")])
-        entry.delete(0, 'end')
-        entry.insert(0, file_path)
+def get_band_for_filename(filename, bands_df):
+    row = bands_df[bands_df['filename'] == filename]
+    if not row.empty:
+        return row['band'].iloc[0]
     else:
-        directory = filedialog.askdirectory()
-        entry.delete(0, 'end')
-        entry.insert(0, directory)
+        return "Filename not found in the dataframe"
 
 
-def select_directory(entry_widget):
-    folder_path = filedialog.askdirectory()
-    entry_widget.delete(0, tk.END)
-    entry_widget.insert(tk.END, folder_path)
+def parse_exif_files(exif_files):
+    bands = pd.DataFrame(columns=['filename', 'band', 'frequency'])
+    for exif_file in exif_files:
+        print("Get bandName from:", exif_file)
+
+        exif_file = os.path.join(exif_file)
+        if not os.path.exists(exif_file):
+            print(f"Warning: EXIF file not found for {exif_file}. Expected path: {exif_file}. Skipping...")
+            continue
+        
+        filename = os.path.basename(exif_file).split('.')[0]
+        with open(exif_file, 'r') as file:
+            bandName = ''
+            bandFreq = ''
+            for line in file:
+                if "BandName" in line:
+                    bandName = line.split(":")[1].strip()
+                    print("bandName:", bandName)        
+                if "BandFreq" in line:
+                    bandFreq = line.split(":")[1].strip()        
+     
+            bands.loc[len(bands.index)] = [filename, bandName, bandFreq] 
+
+    return bands
 
 
-def run():
-    global is_reference_panel_selected
+def parse_tif_files(tif_files, bands):
+    dfs = []
+    rows = 0
+    cols = 0
+    kernel = np.ones((3, 3)) / 9  
+    for tif_file in tif_files:
+        filename = os.path.basename(tif_file)
+        pattern = r"^(.*?)_step\d+\.\d+\.TIF$"
+        match = re.match(pattern, filename)
+        if match:
+            common_part = match.group(1)
+            print("matched filename:", common_part)
+        raster_data = tf.imread(tif_file)
+        # Apply filter to the raster data
+        filtered_raster_data = cv2.filter2D(raster_data, -1, kernel)
+        rows, cols = filtered_raster_data.shape
+        reshaped_data = filtered_raster_data.reshape((rows * cols, 1))
+        
+        df = pd.DataFrame(reshaped_data, columns=[get_band_for_filename(common_part, bands)])
+        dfs.append(df)
+    merged_df = pd.concat(dfs, axis=1)
 
-    exif_dir_path = entry_exif_dir.get()
-    tif_dir_path = entry_tif_dir.get()
-    output_dir_path = entry_output_dir.get()
+    return merged_df, rows, cols
 
+def populate_result(result_image_label, result_label, merged_df, rows, cols):
+    
+    #image_data = merged_df.to_numpy()
+    #num_bands = len(merged_df.columns)  # Number of bands
+    #reshaped_data = image_data.reshape((rows, cols, num_bands))
+
+
+    ndvi_data = np.array(merged_df['NDVI'])
+    reshaped_data = ndvi_data.reshape((rows, cols))
+
+    min_value = reshaped_data.min()
+    max_value = reshaped_data.max()
+    adjusted_data = (reshaped_data - min_value) / (max_value - min_value) * 255
+
+    height, width = adjusted_data.shape[:2]
+
+    # Define the coordinates for the middle region
+    top = (height - 250) // 2
+    bottom = top + 250
+    left = (width - 250) // 2
+    right = left + 250
+
+    # Slice the image data to select the middle region
+    middle_region = adjusted_data[top:bottom, left:right]
+
+    # Calculate the mean of the middle region
+    mean_value = np.mean(middle_region)
+    #mean_value = np.mean(reshaped_data)
+    
+    image = Image.fromarray(np.uint8(adjusted_data), mode='L')
+    resized_image = image.resize((250, 200))
+    photoImage = ImageTk.PhotoImage(resized_image)
+    result_image_label.image = photoImage
+    result_image_label.configure(image=photoImage)
+    result_label.configure(text=f"NDVI mean: {mean_value:.2f}")
+
+
+def run(result_image_label, result_label, params):
   
+    bands = parse_exif_files(params.exif_files)
+    merged_df, rows, cols = parse_tif_files(params.tif_files, bands)
+    merged_df['NDVI'] = (merged_df['NIR'] - merged_df['Red']) / (merged_df['NIR'] + merged_df['Red'])
 
-    os.environ['EXIF_DIR'] = exif_dir_path
-    os.environ['TIF_DIR'] = tif_dir_path
-    os.environ['OUTPUT_DIR'] = output_dir_path
+    populate_result(result_image_label, result_label, merged_df, rows, cols)
+   
+   
 
 
-    outputs = []
+
+ 
+ 
+
+
+class Params():
+    exif_files = []
+    tif_files = []
+# GUI part
+class GUI():
+
+
+    def select_directory(self, label, filetypes, listbox):
+        file_paths = filedialog.askopenfilenames(filetypes=filetypes)
+        listbox.insert(tk.END, *file_paths) 
+        if label.cget("text") == 'Select exif files':
+            self.params.exif_files = file_paths
+        elif label.cget("text") == 'Select tif files':
+            self.params.tif_files = file_paths
+        if self.params.exif_files and self.params.tif_files:
+            self.button_run['state'] = 'normal'
+
+    def __init__(self):
+        root = tk.Tk()
+
+        self.params = Params()
+        root.title('WATER COLOR')
+
+        window_width = 400
+        window_height = 520
+
+        screen_width = root.winfo_screenwidth()
+        screen_height = root.winfo_screenheight()
+
+        center_x = int(screen_width/2 - window_width / 2)
+        center_y = int(screen_height/2 - window_height / 2)
+
+        root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
+
+        exif_label = tk.Label(root, text='Select exif files')
+        exif_label.grid(row=0, column=0, padx=10)
+        exif_button = tk.Button(root, text="Browse", command=lambda: self.select_directory(exif_label, [("Exif Files", "*.txt")], exif_listbox))
+        exif_button.grid(row=2, column=0, padx=10)
+
+        exif_listbox = Listbox(root)
+        exif_listbox.grid(row=1, column=0, padx=10)
+
+
+
+        tif_label = tk.Label(root, text='Select tif files')
+        tif_label.grid(row=0, column=1)
+        tif_button = tk.Button(root, text="Browse", command=lambda: self.select_directory(tif_label, [("TIFF Files", "*.TIF")], tif_listbox))
+        tif_button.grid(row=2, column=1)
+
+        tif_listbox = Listbox(root)
+        tif_listbox.grid(row=1, column=1)
+
+        self.result_image_label = tk.Label(root, text='Will present result here')
+        self.result_image_label.grid(row=4, column=0, columnspan=3, pady=(10, 0))
+        self.result_label = tk.Label(root, text='')
+        self.result_label.grid(row=5, column=0, columnspan=3, pady=(10, 0))
+
+        self.button_run = tk.Button(root, text="Run", command=lambda: run(self.result_image_label, self.result_label, self.params))
+        self.button_run['state'] = 'disabled'
+        self.button_run.grid(row=3, column=0, columnspan=2, pady=(10, 0))
+
+       
+        root.mainloop()
+
 
     
 
-    # Save output to file
-    output_text = '\n'.join(outputs)
-    output_file = os.path.join(output_dir_path, 'Sum_Script_Prints.txt')
-    try:
-        with open(output_file, 'w') as f:
-            f.write(output_text)
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to write to output file: {str(e)}")
-        return
 
-    # Optionally, you could also create an entry in Sum_Script_Prints.txt
-    try:
-        with open(output_file, 'a') as f:
-            f.write(f'\nSummary script created at: {output_file}\n')
-    except Exception as e:
-        messagebox.showerror("Error", f"Failed to write to output file: {str(e)}")
-
-    print(f'Output written to {output_file}')
-    root.destroy()
-    os._exit(0)  # force exit
-
-# GUI part
-root = tk.Tk()
-
-
-label_output_dir = tk.Label(root, text="Directory Path of output")
-label_output_dir.pack()
-entry_output_dir = tk.Entry(root)
-entry_output_dir.pack()
-button_output_dir = tk.Button(root, text="Browse", command=lambda: select_directory(entry_output_dir))
-button_output_dir.pack()
-
-label_exif_dir = tk.Label(root, text="Directory Path of exif")
-label_exif_dir.pack()
-entry_exif_dir = tk.Entry(root)
-entry_exif_dir.pack()
-button_exif_dir = tk.Button(root, text="Browse", command=lambda: select_directory(entry_exif_dir))
-button_exif_dir.pack()
-
-
-label_tif_dir = tk.Label(root, text="Image input Directory")
-label_tif_dir.pack()
-entry_tif_dir = tk.Entry(root)
-entry_tif_dir.pack()
-button_tif_dir = tk.Button(root, text="Browse", command=lambda: select_directory(entry_tif_dir))
-button_tif_dir.pack()
-
-button_run = tk.Button(root, text="Run", command=run)
-button_run.pack()
-
-root.mainloop()
+gui = GUI()
