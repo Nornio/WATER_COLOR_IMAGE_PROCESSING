@@ -139,11 +139,7 @@ def populate_result(result_image_label, result_label, merged_df, rows, cols):
     ndvi_data = np.array(merged_df['NDVI'])
     reshaped_data = ndvi_data.reshape((rows, cols))
 
-    min_value = reshaped_data.min()
-    max_value = reshaped_data.max()
-    adjusted_data = (reshaped_data - min_value) / (max_value - min_value) * 255
-
-    height, width = adjusted_data.shape[:2]
+    height, width = reshaped_data.shape[:2]
 
     # Define the coordinates for the middle region
     top = (height - 250) // 2
@@ -152,11 +148,17 @@ def populate_result(result_image_label, result_label, merged_df, rows, cols):
     right = left + 250
 
     # Slice the image data to select the middle region
-    middle_region = adjusted_data[top:bottom, left:right]
+    middle_region = reshaped_data[top:bottom, left:right]
 
     # Calculate the mean of the middle region
     mean_value = np.mean(middle_region)
     #mean_value = np.mean(reshaped_data)
+
+    min_value = reshaped_data.min()
+    max_value = reshaped_data.max()
+    adjusted_data = (reshaped_data - min_value) / (max_value - min_value) * 255
+
+
     
     image = Image.fromarray(np.uint8(adjusted_data), mode='L')
     resized_image = image.resize((250, 200))
@@ -171,7 +173,7 @@ def run(result_image_label, result_label, params):
     bands = parse_exif_files(params.exif_files)
     merged_df, rows, cols = parse_tif_files(params.tif_files, bands)
     merged_df['NDVI'] = (merged_df['NIR'] - merged_df['Red']) / (merged_df['NIR'] + merged_df['Red'])
-
+    #TODO: here we should calculate water color with Niklas formula
     populate_result(result_image_label, result_label, merged_df, rows, cols)
    
    
