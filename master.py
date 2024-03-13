@@ -170,11 +170,26 @@ def populate_result(result_image_label, result_label, merged_df, rows, cols):
 
 def run(result_image_label, result_label, params):
   
+    Rr = 0.083
     bands = parse_exif_files(params.exif_files)
-    merged_df, rows, cols = parse_tif_files(params.tif_files, bands)
-    merged_df['NDVI'] = (merged_df['NIR'] - merged_df['Red']) / (merged_df['NIR'] + merged_df['Red'])
+    a0 = np.array([0.00345, -0.000005845])
+    a1 = np.array([0.5592, 0.0006209])
+    bands['frequency'] = bands['frequency'].str.extract(r'(\d+)')
+    bands['frequency'] = bands['frequency'].astype(int)
+    bands['a0'] = bands['frequency'].apply(lambda x: a0[0] + a0[1] * x)
+    bands['a1'] = bands['frequency'].apply(lambda x: (a1[0] + a1[1] * x) - 0.080756)
+
+
+
+    spectra, rows, cols = parse_tif_files(params.tif_files, bands)
+    for band in spectra.columns:
+        a1 = bands.loc[bands['band'] == band, 'a1'].values[0]
+        a0 = bands.loc[bands['band'] == band, 'a0'].values[0]
+        spectra['Rrs0+' + band] = spectra[band].apply(lambda x: x-a1*x-a0)
+        spectra['Rrs0-' + band] = spectra[band].apply(lambda x: spectra['Rrs0+' + band]/0.54)
+    spectra['NDVI'] = (spectra['NIR'] - spectra['Red']) / (spectra['NIR'] + spectra['Red'])
     #TODO: here we should calculate water color with Niklas formula
-    populate_result(result_image_label, result_label, merged_df, rows, cols)
+    populate_result(result_image_label, result_label, spectra, rows, cols)
    
    
 
