@@ -118,15 +118,27 @@ def parse_tif_files(tif_files, bands):
             common_part = match.group(1)
             print("matched filename:", common_part)
         raster_data = tf.imread(tif_file)
+
+        height, width = raster_data.shape[:2]
+
+        # Define the coordinates for the middle region
+        top = (height - 250) // 2
+        bottom = top + 250
+        left = (width - 250) // 2
+        right = left + 250
+
+        # Slice the image data to select the middle region
+        middle_region = raster_data[top:bottom, left:right]
+
         # Apply filter to the raster data
-        filtered_raster_data = cv2.filter2D(raster_data, -1, kernel)
+        filtered_raster_data = cv2.filter2D(middle_region, -1, kernel)
         rows, cols = filtered_raster_data.shape
         reshaped_data = filtered_raster_data.reshape((rows * cols, 1))
         
         df = pd.DataFrame(reshaped_data, columns=[get_band_for_filename(common_part, bands)])
         dfs.append(df)
+    
     merged_df = pd.concat(dfs, axis=1)
-
     return merged_df, rows, cols
 
 def populate_result(result_image_label, result_label, merged_df, rows, cols):
@@ -141,18 +153,18 @@ def populate_result(result_image_label, result_label, merged_df, rows, cols):
 
     height, width = reshaped_data.shape[:2]
 
-    # Define the coordinates for the middle region
-    top = (height - 250) // 2
-    bottom = top + 250
-    left = (width - 250) // 2
-    right = left + 250
+    ## Define the coordinates for the middle region
+    #top = (height - 250) // 2
+    #bottom = top + 250
+    #left = (width - 250) // 2
+    #right = left + 250
 
-    # Slice the image data to select the middle region
-    middle_region = reshaped_data[top:bottom, left:right]
+    ## Slice the image data to select the middle region
+    #middle_region = reshaped_data[top:bottom, left:right]
 
-    # Calculate the mean of the middle region
-    mean_value = np.mean(middle_region)
-    #mean_value = np.mean(reshaped_data)
+    ## Calculate the mean of the middle region
+    #mean_value = np.mean(middle_region)
+    mean_value = np.mean(reshaped_data)
 
     min_value = reshaped_data.min()
     max_value = reshaped_data.max()
@@ -171,6 +183,7 @@ def populate_result(result_image_label, result_label, merged_df, rows, cols):
 def run(result_image_label, result_label, params):
   
     Rr = 0.083
+    calib = 100000
     bands = parse_exif_files(params.exif_files)
     a0 = np.array([0.00345, -0.000005845])
     a1 = np.array([0.5592, 0.0006209])
@@ -182,13 +195,14 @@ def run(result_image_label, result_label, params):
 
 
     spectra, rows, cols = parse_tif_files(params.tif_files, bands)
+    #TODO: here we should calculate water color with Niklas formula
     for band in spectra.columns:
         a1 = bands.loc[bands['band'] == band, 'a1'].values[0]
         a0 = bands.loc[bands['band'] == band, 'a0'].values[0]
         spectra['Rrs0+' + band] = spectra[band].apply(lambda x: x-a1*x-a0)
-        spectra['Rrs0-' + band] = spectra[band].apply(lambda x: spectra['Rrs0+' + band]/0.54)
+        spectra['Rrs0-' + band] = spectra['Rrs0+' + band].apply(lambda x: x/0.54)
+        spectra['Rrs0-calib' + band] = spectra['Rrs0-' + band].apply(lambda x: x/calib)
     spectra['NDVI'] = (spectra['NIR'] - spectra['Red']) / (spectra['NIR'] + spectra['Red'])
-    #TODO: here we should calculate water color with Niklas formula
     populate_result(result_image_label, result_label, spectra, rows, cols)
    
    
