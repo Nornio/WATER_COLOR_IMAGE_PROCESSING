@@ -196,12 +196,26 @@ def run(result_image_label, result_label, params):
 
     spectra, rows, cols = parse_tif_files(params.tif_files, bands)
     #TODO: here we should calculate water color with Niklas formula
-    for band in spectra.columns:
+
+    # Add data from Niklas doc
+    niklas_row = pd.DataFrame({'Green': [19008], 'NIR': [6208], 'Red': [13888], 'RedEdge': [7616]})
+
+    # Add the new row at the top
+    spectra = pd.concat([niklas_row, spectra], ignore_index=True)
+    spectra_bands = spectra.columns
+    for band in spectra_bands:
         a1 = bands.loc[bands['band'] == band, 'a1'].values[0]
         a0 = bands.loc[bands['band'] == band, 'a0'].values[0]
         spectra['Rrs0+' + band] = spectra[band].apply(lambda x: x-a1*x-a0)
+        #spectra['Rrs0-' + band] = spectra['Rrs0+' + band].apply(lambda x: x/0.54)
+        #spectra['Rrs0-calib' + band] = spectra['Rrs0-' + band].apply(lambda x: x/calib)
+
+    for band in spectra_bands:
         spectra['Rrs0-' + band] = spectra['Rrs0+' + band].apply(lambda x: x/0.54)
+        
+    for band in spectra_bands:
         spectra['Rrs0-calib' + band] = spectra['Rrs0-' + band].apply(lambda x: x/calib)
+
     spectra['NDVI'] = (spectra['NIR'] - spectra['Red']) / (spectra['NIR'] + spectra['Red'])
     populate_result(result_image_label, result_label, spectra, rows, cols)
    
