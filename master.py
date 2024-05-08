@@ -78,9 +78,16 @@ def get_band_for_filename(filename, bands_df):
     else:
         return "Filename not found in the dataframe"
 
+def get_freq_for_filename(filename, bands_df):
+    row = bands_df[bands_df['filename'] == filename]
+    if not row.empty:
+        return row['CentralWavelength'].iloc[0]
+    else:
+        return "CentralWavelength not found in the dataframe"
+
 
 def parse_exif_files(exif_files):
-    bands = pd.DataFrame(columns=['filename', 'band', 'frequency'])
+    bands = pd.DataFrame(columns=['filename', 'band', 'frequency', 'CentralWavelength' ])
     for exif_file in exif_files:
         print("Get bandName from:", exif_file)
 
@@ -93,14 +100,17 @@ def parse_exif_files(exif_files):
         with open(exif_file, 'r') as file:
             bandName = ''
             bandFreq = ''
+            centralWavelength = ''
             for line in file:
                 if "BandName" in line:
                     bandName = line.split(":")[1].strip()
-                    print("bandName:", bandName)        
                 if "BandFreq" in line:
-                    bandFreq = line.split(":")[1].strip()        
+                    bandFreq = line.split(":")[1].strip()
+                if "CentralWavelength" in line:
+                    centralWavelength = line.split(":")[1].strip()        
+          
      
-            bands.loc[len(bands.index)] = [filename, bandName, bandFreq] 
+            bands.loc[len(bands.index)] = [filename, bandName, bandFreq, centralWavelength] 
 
     return bands
 
@@ -118,6 +128,7 @@ def parse_tif_files(tif_files, bands):
             common_part = match.group(1)
             print("matched filename:", common_part)
         raster_data = tf.imread(tif_file)
+        raster_data = raster_data / 65535.0 #Transform to reflectance
 
         height, width = raster_data.shape[:2]
 
@@ -135,11 +146,12 @@ def parse_tif_files(tif_files, bands):
         rows, cols = filtered_raster_data.shape
         reshaped_data = filtered_raster_data.reshape((rows * cols, 1))
         
-        df = pd.DataFrame(reshaped_data, columns=[get_band_for_filename(common_part, bands)])
+        df = pd.DataFrame(reshaped_data, columns=[get_freq_for_filename(common_part, bands)])
         dfs.append(df)
     
     merged_df = pd.concat(dfs, axis=1)
-    return merged_df, rows, cols
+    sort_df = merged_df.sort_index(axis = 1)
+    return sort_df, rows, cols
 
 def populate_result(result_image_label, result_label, merged_df, rows, cols):
     
@@ -198,10 +210,10 @@ def run(result_image_label, result_label, params):
     #TODO: here we should calculate water color with Niklas formula
 
     # Add data from Niklas doc
-    niklas_row = pd.DataFrame({'Green': [19008], 'NIR': [6208], 'Red': [13888], 'RedEdge': [7616]})
-
+    #niklas_row = pd.DataFrame({'Green': [19008], 'NIR': [6208], 'Red': [13888], 'RedEdge': [7616]})
     # Add the new row at the top
-    spectra = pd.concat([niklas_row, spectra], ignore_index=True)
+    #spectra = pd.concat([niklas_row, spectra], ignore_index=True)
+
     spectra_bands = spectra.columns
     for band in spectra_bands:
         a1 = bands.loc[bands['band'] == band, 'a1'].values[0]
