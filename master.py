@@ -12,6 +12,9 @@ import tkinter as tk
 import cv2
 from tkinter import filedialog, Listbox
 from PIL import Image, ImageTk
+import math
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 
 # Run install_dependency.py before importing any modules
 subprocess.run([sys.executable, 'install_dependency.py'])
@@ -160,10 +163,14 @@ def populate_result(result_image_label, result_label, merged_df, rows, cols):
     #reshaped_data = image_data.reshape((rows, cols, num_bands))
 
 
-    ndvi_data = np.array(merged_df['NDVI'])
-    reshaped_data = ndvi_data.reshape((rows, cols))
+    color_data = np.array(merged_df['Colour'])
+    #reshaped_data = color_data.reshape((rows, cols))
 
-    height, width = reshaped_data.shape[:2]
+
+    add_plot_distribution(color_data, result_image_label)
+
+
+    #height, width = reshaped_data.shape[:2]
 
     ## Define the coordinates for the middle region
     #top = (height - 250) // 2
@@ -176,33 +183,53 @@ def populate_result(result_image_label, result_label, merged_df, rows, cols):
 
     ## Calculate the mean of the middle region
     #mean_value = np.mean(middle_region)
-    mean_value = np.mean(reshaped_data)
+    #mean_value = np.mean(reshaped_data)
 
-    min_value = reshaped_data.min()
-    max_value = reshaped_data.max()
-    adjusted_data = (reshaped_data - min_value) / (max_value - min_value) * 255
+    #min_value = reshaped_data.min()
+    #max_value = reshaped_data.max()
+    #adjusted_data = (reshaped_data - min_value) / (max_value - min_value) * 255
 
 
     
-    image = Image.fromarray(np.uint8(adjusted_data), mode='L')
-    resized_image = image.resize((250, 200))
-    photoImage = ImageTk.PhotoImage(resized_image)
-    result_image_label.image = photoImage
-    result_image_label.configure(image=photoImage)
-    result_label.configure(text=f"NDVI mean: {mean_value:.2f}")
+    #image = Image.fromarray(np.uint8(adjusted_data), mode='L')
+    #resized_image = image.resize((250, 200))
+    #photoImage = ImageTk.PhotoImage(resized_image)
+    #result_image_label.image = photoImage
+    #result_image_label.configure(image=photoImage)
+    #result_label.configure(text=f"Color mean: {mean_value:.2f}")
 
+def add_plot_distribution(data, result_image_label):
+    # Flatten the reshaped_data to a 1D array
+    # Plot the histogram
+    fig = Figure(figsize=(5, 4), dpi=100)
+    ax = fig.add_subplot(111)
+
+
+    counts, bins = np.histogram(data, bins='auto')
+    filtered_counts = counts[counts > 200]
+    filtered_bins = bins[:-1][counts > 200] 
+
+    #ax.hist(data, bins='auto', alpha=0.7, rwidth=0.85)
+    ax.bar(filtered_bins, filtered_counts, width=np.diff(bins)[0], align='edge', alpha=0.7)
+    ax.set_title('Distribution of Water Color')
+    ax.set_xlabel('Colour (mgPt/l)')
+    ax.set_ylabel('Frequency')
+    fig.savefig('plot.png')
+
+    plot_image = Image.open('plot.png')
+    plot_photo = ImageTk.PhotoImage(plot_image)
+    result_image_label.config(image=plot_photo)
+    result_image_label.image = plot_photo
 
 def run(result_image_label, result_label, params):
   
-    Rr = 0.083
-    calib = 100000
     bands = parse_exif_files(params.exif_files)
     a0 = np.array([0.00345, -0.000005845])
     a1 = np.array([0.5592, 0.0006209])
     bands['frequency'] = bands['frequency'].str.extract(r'(\d+)')
     bands['frequency'] = bands['frequency'].astype(int)
     bands['a0'] = bands['frequency'].apply(lambda x: a0[0] + a0[1] * x)
-    bands['a1'] = bands['frequency'].apply(lambda x: (a1[0] + a1[1] * x) - 0.080756)
+    bands['a1'] = bands['frequency'].apply(lambda x: (a1[0] + a1[1] * x) - 0.093174)
 
 
 
@@ -210,33 +237,57 @@ def run(result_image_label, result_label, params):
     #TODO: here we should calculate water color with Niklas formula
 
     # Add data from Niklas doc
-    #niklas_row = pd.DataFrame({'Green': [19008], 'NIR': [6208], 'Red': [13888], 'RedEdge': [7616]})
+    niklas_row = pd.DataFrame({'560': [0.192655], '650': [0.141432], '730': [0.255875], '860': [0.234616]})
     # Add the new row at the top
-    #spectra = pd.concat([niklas_row, spectra], ignore_index=True)
+    spectra = pd.concat([niklas_row, spectra], ignore_index=True)
 
     spectra_bands = spectra.columns
     for band in spectra_bands:
-        a1 = bands.loc[bands['band'] == band, 'a1'].values[0]
-        a0 = bands.loc[bands['band'] == band, 'a0'].values[0]
-        spectra['Rrs0+' + band] = spectra[band].apply(lambda x: x-a1*x-a0)
-        #spectra['Rrs0-' + band] = spectra['Rrs0+' + band].apply(lambda x: x/0.54)
-        #spectra['Rrs0-calib' + band] = spectra['Rrs0-' + band].apply(lambda x: x/calib)
+        a1 = bands.loc[bands['frequency'] == int(band), 'a1'].values[0]
+        a0 = bands.loc[bands['frequency'] == int(band), 'a0'].values[0]
+        spectra['Rs' + band] = spectra[spectra_bands[-1]].apply(lambda x: a1*x+a0)
+      
 
     for band in spectra_bands:
-        spectra['Rrs0-' + band] = spectra['Rrs0+' + band].apply(lambda x: x/0.54)
+        spectra['Rrs' + band] = spectra[band] - spectra['Rs' + band] 
         
     for band in spectra_bands:
-        spectra['Rrs0-calib' + band] = spectra['Rrs0-' + band].apply(lambda x: x/calib)
+        spectra['Rrs_aw' + band] = spectra['Rrs' + band].apply(lambda x: x/0.54)
 
-    spectra['NDVI'] = (spectra['NIR'] - spectra['Red']) / (spectra['NIR'] + spectra['Red'])
+    spectra['bbsp730'] = spectra['Rrs_aw730']*1.799/0.083
+    spectra['bbsp560'] = spectra['bbsp730']*(560/730)**-1.4
+    spectra['bbsp650'] = spectra['bbsp730']*(650/730)**-1.4
+    spectra['bbsp860'] = spectra['bbsp730']*(840/730)**-1.4
+
+
+    for band in spectra_bands:
+        spectra['bsp' + band] = spectra['bbsp' + band].apply(lambda x: x/0.022)
+
+
+    for band in spectra_bands:
+        spectra['a' + band] = (0.083 * spectra['bbsp' + band] )/spectra['Rrs_aw' + band]
+
+    
+    spectra['a860'] = 4.3
+
+    spectra['aCOM560'] = spectra['a560']-0.0724
+    spectra['aCOM650'] = spectra['a650']-0.3445
+    spectra['aCOM730'] = spectra['a730']-1.7990
+    spectra['aCOM860'] = spectra['a860']-4.3
+
+    spectra['AbsPCDOM560'] = 0.4343*spectra['aCOM560']*0.05
+    spectra['AbsPCDOM410'] = spectra['AbsPCDOM560']*math.exp(-0.013*(410-560))
+
+    spectra['Colour'] = spectra['AbsPCDOM410']*390
+
+
+    spectra.head(3).to_csv('spectra_head.csv', index=False)
+
     populate_result(result_image_label, result_label, spectra, rows, cols)
    
    
 
 
-
- 
- 
 
 
 class Params():
